@@ -37,23 +37,29 @@
 }
 
 .badgePro {
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: linear-gradient(135deg, #ffd166 0%, #ff9770 100%);
+  background: #ffffff;
   color: #191600;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
+  border: none;
+  margin-left: auto;
 }
 
 .badgeFree {
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: var(--bg-toggle);
-  color: var(--color-text-muted);
+  background: #ffffff;
+  color: #333333;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
+  flex-shrink: 0;
+  border: none;
+  margin-left: auto;
 }
 
 .status {
@@ -134,7 +140,25 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 4px;
+  padding: 10px 12px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 12px;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.profile:hover,
+.profile:focus-visible {
+  background: var(--bg-chip);
+  outline: none;
+}
+
+.profile:active {
+  transform: scale(0.995);
 }
 
 .avatar {
@@ -235,6 +259,96 @@
 .deleteAccount:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── Premium panel (drawer-level screen transition) ────── */
+
+.premiumPanel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Extend all the way to the screen bottom (not just safe-area) so
+     the drawer's logout row below can't peek out under us. The content
+     is kept above the gesture bar by adding safe-area-inset-bottom to
+     the inner padding instead. */
+  bottom: 0;
+  width: min(280px, 82vw);
+  z-index: 11;
+  /* Fully opaque — var(--bg-panel-strong) is rgba 0.96 so the drawer's
+     logout row bled through under it. Use the solid page color instead. */
+  background: var(--bg-page-middle);
+  color: var(--color-text);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: calc(max(16px, env(safe-area-inset-top)) + 40px) 16px calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  animation: panelSlide 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes panelSlide {
+  from { transform: translateX(-24px); }
+  to { transform: translateX(0); }
+}
+
+.premiumHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.premiumBack {
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 32px;
+  line-height: 1;
+  /* Push the ‹ glyph up a few pixels — the character sits visually
+     low in its line box, which left it below the title baseline. */
+  padding: 0 0 6px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.premiumBack:focus-visible {
+  outline: none;
+}
+
+.premiumBack:active {
+  opacity: 0.6;
+}
+
+.premiumTitle {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.premiumSubtitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-top: 4px;
+}
+
+.premiumStatusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px;
+  border-radius: 14px;
+  background: var(--bg-chip);
+  margin-top: 4px;
+}
+
+.premiumActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
 }
 
 /* ── Subscription details modal ────────────────────────── */

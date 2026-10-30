@@ -48,6 +48,8 @@ import CustomizePanel, { type SelectionTag } from './CustomizePanel'
 import { AccountDrawerTop, AccountDrawerFooter } from './AccountDrawerSection'
 import { useLocale, useTr } from '../i18n'
 import { usePremium } from '../hooks/usePremium'
+import { useFreeTierLimits } from '../hooks/useFreeTierLimits'
+import Paywall from './Paywall'
 import { showInterstitial, hideBanner, showBottomBanner } from '../lib/admob'
 import { App, type URLOpenListenerEvent } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
@@ -818,6 +820,8 @@ export default function SlimeApp() {
   const { locale, setLocale } = useLocale()
   const tr = useTr()
   const { isPremium } = usePremium()
+  const { canSave, canShare, incrementSave, incrementShare } = useFreeTierLimits()
+  const [paywallOpen, setPaywallOpen] = useState(false)
   // Hide the native AdMob banner whenever the left drawer opens — the
   // banner is a native overlay that sits ABOVE the webview, so CSS
   // z-index can't make the drawer render above it. Restore the banner
@@ -1504,7 +1508,7 @@ export default function SlimeApp() {
     // ANY device (recipient's browser if the app isn't installed; the app
     // itself if the custom-scheme redirect in the landing page fires).
     // window.location on native is https://localhost — useless to share.
-    return `https://parkyoonha.github.io/slimong/?d=${b64}`
+    return `https://parkyoonha.github.io/slime/landing/?d=${b64}`
   }
   const encodeShareUrl = (): string =>
     encodeShareUrlFromState(buildStateSnapshot())
@@ -1513,6 +1517,12 @@ export default function SlimeApp() {
   // name (asked via nameDialog), load a saved design back into live
   // state, rename, remove one.
   const beginSaveToCollection = () => {
+    // Free tier is capped at 2 lifetime saves — redirect to the paywall
+    // instead of opening the name dialog once the quota is exhausted.
+    if (!canSave) {
+      setPaywallOpen(true)
+      return
+    }
     // Capture the canonical thumbnail + state snapshot NOW so the
     // preview matches what the user was looking at when they hit
     // save, regardless of any tweaks made while the name dialog
@@ -1550,6 +1560,7 @@ export default function SlimeApp() {
           thumb: pendingThumb
         }
       ])
+      incrementSave()
       // Fresh save — clear the unsaved-changes gate so the
       // beforeunload confirm won't fire until the user tweaks
       // something new.
@@ -1611,6 +1622,10 @@ export default function SlimeApp() {
   // Share a specific saved slime via Web Share API (falls back to
   // clipboard copy). Used from the collection cards + browse view.
   const shareCollectionItem = async (id: string) => {
+    if (!canShare) {
+      setPaywallOpen(true)
+      return
+    }
     const entry = collection.find((c) => c.id === id)
     if (!entry) return
     const url = encodeShareUrlFromState(entry.state)
@@ -1622,6 +1637,7 @@ export default function SlimeApp() {
     try {
       if (typeof navigator !== 'undefined' && 'share' in navigator) {
         await navigator.share(payload)
+        incrementShare()
         return
       }
     } catch {
@@ -1629,6 +1645,7 @@ export default function SlimeApp() {
     }
     try {
       await navigator.clipboard.writeText(url)
+      incrementShare()
       setToast(tr('링크가 복사되었습니다'))
       window.setTimeout(() => setToast(null), 2000)
     } catch {
@@ -1674,6 +1691,10 @@ export default function SlimeApp() {
 
 
   const handleShare = async () => {
+    if (!canShare) {
+      setPaywallOpen(true)
+      return
+    }
     const url = encodeShareUrl()
     const title = 'soundslime'
 
@@ -1692,6 +1713,7 @@ export default function SlimeApp() {
           url,
           dialogTitle: tr('슬라임 공유하기')
         })
+        incrementShare()
         return
       } catch (err) {
         const msg = (err as { message?: string })?.message ?? ''
@@ -1703,6 +1725,7 @@ export default function SlimeApp() {
     try {
       if (typeof navigator !== 'undefined' && 'share' in navigator) {
         await navigator.share({ title, url })
+        incrementShare()
         return
       }
     } catch {
@@ -1712,6 +1735,7 @@ export default function SlimeApp() {
     // Final fallback: copy to clipboard.
     try {
       await navigator.clipboard.writeText(url)
+      incrementShare()
       setToast(tr('링크가 복사되었습니다'))
       window.setTimeout(() => setToast(null), 2000)
     } catch {
@@ -4358,17 +4382,33 @@ export default function SlimeApp() {
       // ease toward the target at 0.15 so the motion feels like the panel
       // "pushes" the sphere rather than snapping to a new position.
       const canvasH = canvas.clientHeight || 1
-      const rootBaselinePx = 60
-      const expandedPx = Math.max(
-        0,
-        controlsHeightRef.current - rootBaselinePx
-      )
-      const frac = Math.min(1, expandedPx / canvasH)
       // Convert to world Y: viewport world height at Z=0 ≈
-      // 2 · camera.z · tan(fov/2). Move slime up by frac × that × 0.6
-      // so a fully expanded panel lifts the sphere well clear of it.
+      // 2 · camera.z · tan(fov/2).
       const viewportWorldHeight =
         2 * CAMERA_Z * Math.tan((camera.fov * Math.PI) / 360)
+      // Default (panel collapsed) anchor: slime sits centred in the
+      // visible area ABOVE the bottom controls + AdMob banner, not at
+      // the geometric canvas centre — otherwise it reads bottom-heavy
+      // because the lower half is partly covered by UI.
+      // --ad-banner-height is 0 until the native banner reports a size.
+      const bannerCssPx =
+        parseFloat(
+          getComputedStyle(document.documentElement)
+            .getPropertyValue('--ad-banner-height')
+        ) || 0
+      // Baseline shift uses just the collapsed toggle row (+ banner) so
+      // the "default" position stays visually balanced regardless of
+      // sub-panel state.
+      const rootBaselinePx = 60
+      const collapsedBottomPx = rootBaselinePx + bannerCssPx
+      const baseShiftFrac = collapsedBottomPx / (2 * canvasH)
+      // Panel-growth lift: when the user opens a sub-panel, the slime
+      // nudges up proportionally to how far the panel has grown beyond
+      // the baseline. Weight is intentionally modest (0.25) so the ball
+      // doesn't travel far — the sub-panel itself takes the extra space
+      // without the slime running away above it.
+      const expandedPx = Math.max(0, controlsHeightRef.current - rootBaselinePx)
+      const growShiftFrac = (expandedPx * 0.25) / canvasH
       // Collection carousel view: the bottom carousel (240px tall)
       // now doubles as a live-preview surface — the top of the screen
       // renders the currently-selected slime for touch interaction.
@@ -4380,9 +4420,10 @@ export default function SlimeApp() {
       const inCollectionCarousel =
         bottomModeRef.current === 'collection' &&
         browseIdxRef.current === null
+      const frac = Math.min(1, expandedPx / canvasH)
       const targetShiftY = inCollectionCarousel
         ? viewportWorldHeight * 0.14
-        : frac * viewportWorldHeight * 0.5
+        : (baseShiftFrac + growShiftFrac) * viewportWorldHeight
       const targetPanelScale = inCollectionCarousel
         ? 0.95
         : 1 - frac * 0.22
@@ -6450,6 +6491,8 @@ export default function SlimeApp() {
           <div className={styles.overlayText}>{busyLabel || tr('준비 중…')}</div>
         </div>
       )}
+
+      <Paywall open={paywallOpen} onClose={() => setPaywallOpen(false)} />
     </div>
   )
 }

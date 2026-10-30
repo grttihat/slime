@@ -1,15 +1,13 @@
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { usePremium } from '../hooks/usePremium'
+import { restorePurchases } from '../lib/revenuecat'
 import Paywall from './Paywall'
 import styles from './AccountDrawerSection.module.css'
 
 const BENEFITS = [
-  '무제한 슬라임 만지기',
-  '컬렉션 무제한 저장 · 기기 간 동기화',
-  '슬라임멍 세션 확장 (기본 3분 → 최대 20분)',
-  '광고 제거',
-  '한 번 결제로 평생 사용'
+  '무제한 슬라임 저장 & 공유',
+  '광고 없이 매끄러운 경험'
 ]
 
 function initialFor(name: string | null | undefined, email: string | null | undefined): string {
@@ -19,68 +17,24 @@ function initialFor(name: string | null | undefined, email: string | null | unde
 
 interface Props { onCloseDrawer?: () => void }
 
-/** Top part of the drawer: single "프리미엄 구매하기" button that opens
- *  a benefits-list modal; the modal in turn has the real "구매하기" that
- *  opens the Paywall. No status card / badge / usage counter in the
- *  drawer itself (stripped per UX request) — just the one CTA button.
- *  Premium users see nothing here. */
-export function AccountDrawerTop({ onCloseDrawer }: Props) {
-  const { isPremium, refresh } = usePremium()
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const [paywallOpen, setPaywallOpen] = useState(false)
-
-  const handleSubscribe = () => {
-    setDetailsOpen(false)
-    setPaywallOpen(true)
-  }
-
-  return (
-    <>
-      {!isPremium && (
-        <button
-          type="button"
-          className={styles.subscribeBtn}
-          onClick={() => setDetailsOpen(true)}
-        >
-          프리미엄 구매하기
-        </button>
-      )}
-
-      {detailsOpen && (
-        <div className={styles.detailsBackdrop} onClick={() => setDetailsOpen(false)}>
-          <div className={styles.detailsCard} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal>
-            <div className={styles.detailsHeader}>
-              <div className={styles.detailsTitle}>프리미엄</div>
-              <button className={styles.detailsClose} onClick={() => setDetailsOpen(false)} aria-label="닫기">×</button>
-            </div>
-            <ul className={styles.benefitList}>
-              {BENEFITS.map((b) => <li key={b}>{b}</li>)}
-            </ul>
-            <div className={styles.detailsActions}>
-              <button className={styles.primaryBtn} onClick={handleSubscribe}>
-                프리미엄 구매하기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <Paywall
-        open={paywallOpen}
-        onClose={async () => {
-          setPaywallOpen(false)
-          await refresh()
-          onCloseDrawer?.()
-        }}
-      />
-    </>
-  )
+/** Top slot is empty by design — all premium entry points now live in the
+ *  footer status pill. Kept exported so SlimeApp's drawer layout keeps
+ *  working without changes. */
+export function AccountDrawerTop(_: Props) {
+  return null
 }
 
-/** Bottom slot: profile info + logout. */
+/** Bottom slot: profile row (avatar + name + clickable status pill) +
+ *  logout, with a modal that opens from the pill to show benefits and the
+ *  purchase / restore actions. */
 export function AccountDrawerFooter({ onCloseDrawer }: Props) {
   const { user, signOut } = useAuth()
+  const { isPremium, refresh } = usePremium()
   const [signingOut, setSigningOut] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [paywallOpen, setPaywallOpen] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreMsg, setRestoreMsg] = useState<string | null>(null)
 
   const profile = user?.user_metadata ?? {}
   const displayName = (profile.name as string | undefined) ?? (profile.full_name as string | undefined) ?? null
@@ -98,9 +52,33 @@ export function AccountDrawerFooter({ onCloseDrawer }: Props) {
     }
   }
 
+  const handleSubscribe = () => {
+    setDetailsOpen(false)
+    setPaywallOpen(true)
+  }
+
+  const handleRestore = async () => {
+    setRestoring(true)
+    setRestoreMsg(null)
+    try {
+      await restorePurchases()
+      await refresh()
+      setRestoreMsg('구매 상태를 다시 불러왔어요.')
+    } catch (err) {
+      setRestoreMsg(err instanceof Error ? err.message : '복원에 실패했어요.')
+    } finally {
+      setRestoring(false)
+    }
+  }
+
   return (
     <div className={styles.footer}>
-      <div className={styles.profile}>
+      <button
+        type="button"
+        className={styles.profile}
+        onClick={() => { setRestoreMsg(null); setDetailsOpen(true) }}
+        aria-label="계정 및 프리미엄 상태"
+      >
         <div className={styles.avatar}>
           {avatarUrl ? <img src={avatarUrl} alt="" /> : initialFor(displayName, email)}
         </div>
@@ -108,11 +86,71 @@ export function AccountDrawerFooter({ onCloseDrawer }: Props) {
           <div className={styles.name}>{displayName ?? email ?? '사용자'}</div>
           {email && displayName && <div className={styles.email}>{email}</div>}
         </div>
-      </div>
+        <span className={isPremium ? styles.badgePro : styles.badgeFree}>
+          {isPremium ? '프리미엄' : '일반'}
+        </span>
+      </button>
+
       <button className={styles.logout} onClick={handleSignOut} disabled={signingOut}>
         <span>{signingOut ? '로그아웃 중…' : '로그아웃'}</span>
         <span className={styles.chevron}>›</span>
       </button>
+
+      {detailsOpen && (
+        <aside className={styles.premiumPanel} role="dialog" aria-label="프리미엄">
+          <div className={styles.premiumHeader}>
+            <button
+              type="button"
+              className={styles.premiumBack}
+              onClick={() => setDetailsOpen(false)}
+              aria-label="뒤로"
+            >
+              ‹
+            </button>
+            <div className={styles.premiumTitle}>플랜</div>
+          </div>
+
+          <div className={styles.premiumStatusRow}>
+            <span className={styles.cardTitle}>현재 상태</span>
+            <span className={isPremium ? styles.badgePro : styles.badgeFree}>
+              {isPremium ? '프리미엄' : '일반'}
+            </span>
+          </div>
+
+          <div className={styles.premiumSubtitle}>soundslime 프리미엄</div>
+          <ul className={styles.benefitList}>
+            {BENEFITS.map((b) => <li key={b}>{b}</li>)}
+          </ul>
+
+          {restoreMsg && <div className={styles.subLine}>{restoreMsg}</div>}
+
+          <div className={styles.premiumActions}>
+            {!isPremium && (
+              <button className={styles.primaryBtn} onClick={handleSubscribe}>
+                프리미엄 구매하기
+              </button>
+            )}
+            {isPremium && (
+              <button
+                className={styles.secondaryBtn}
+                onClick={handleRestore}
+                disabled={restoring}
+              >
+                {restoring ? '적용 중…' : '프리미엄 재적용'}
+              </button>
+            )}
+          </div>
+        </aside>
+      )}
+
+      <Paywall
+        open={paywallOpen}
+        onClose={async () => {
+          setPaywallOpen(false)
+          await refresh()
+          onCloseDrawer?.()
+        }}
+      />
     </div>
   )
 }

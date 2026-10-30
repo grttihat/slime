@@ -17,12 +17,18 @@ export async function configureRevenueCat(appUserID: string): Promise<void> {
   if (!isRevenueCatSupported()) return
   const apiKey = platformKey()!
   if (!configured) {
-    await Purchases.setLogLevel({ level: LOG_LEVEL.WARN })
+    await Purchases.setLogLevel({ level: LOG_LEVEL.DEBUG })
     await Purchases.configure({ apiKey, appUserID })
     configured = true
   } else {
     await Purchases.logIn({ appUserID })
   }
+}
+
+export async function restorePurchases(): Promise<CustomerInfo | null> {
+  if (!isRevenueCatSupported() || !configured) return null
+  const { customerInfo } = await Purchases.restorePurchases()
+  return customerInfo
 }
 
 export async function logOutRevenueCat(): Promise<void> {

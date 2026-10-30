@@ -54,7 +54,7 @@
                 <data
                     android:scheme="https"
                     android:host="parkyoonha.github.io"
-                    android:pathPrefix="/slimong" />
+                    android:pathPrefix="/slime/landing" />
             </intent-filter>
 
         </activity>
