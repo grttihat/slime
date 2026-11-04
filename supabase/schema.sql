@@ -147,3 +147,74 @@ end;
 $$;
 
 grant execute on function public.delete_current_user() to authenticated;
+
+-- ─── share_links ─────────────────────────────────────────
+-- Short-code → payload mapping so share URLs can stay below the
+-- length threshold that chat apps like KakaoTalk use before
+-- refusing to fetch OG preview metadata. The code is a random
+-- 8-char alphanumeric string; the payload is the base64 state blob
+-- the receiving client decodes to restore the sender's slime.
+create table if not exists public.share_links (
+  code text primary key,
+  payload text not null,
+  created_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.share_links enable row level security;
+
+-- Anyone (including anonymous recipients opening the link) can look
+-- up a share by its code. The code itself is the capability — guess
+-- its random 8-char value and you get access, which is fine because
+-- share-link contents are already meant to be public.
+drop policy if exists "share_links public read" on public.share_links;
+create policy "share_links public read"
+  on public.share_links for select
+  using (true);
+
+-- Only signed-in users can mint new share links. The anon key alone
+-- won't let someone dump arbitrary payloads into the table.
+drop policy if exists "share_links authenticated insert" on public.share_links;
+create policy "share_links authenticated insert"
+  on public.share_links for insert
+  to authenticated
+  with check (auth.uid() = created_by);
+
+-- Server-side code minting so we don't have to retry on collisions
+-- from the client. Returns the generated code; caller inserts the
+-- payload against it in a follow-up call, OR we do both in one trip
+-- via create_share_link below.
+create or replace function public.create_share_link(p_payload text)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_code text;
+  attempts integer := 0;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  loop
+    attempts := attempts + 1;
+    -- 8 chars of url-safe alphabet. Built off md5(random()) so the
+    -- function doesn't depend on the pgcrypto extension — which isn't
+    -- always pre-enabled on Supabase projects. md5 of random + clock
+    -- is plenty entropy for our collision-retry scheme.
+    new_code := substr(md5(random()::text || clock_timestamp()::text), 1, 8);
+    begin
+      insert into public.share_links (code, payload, created_by)
+      values (new_code, p_payload, auth.uid());
+      return new_code;
+    exception when unique_violation then
+      if attempts > 5 then
+        raise exception 'could not generate unique share code';
+      end if;
+    end;
+  end loop;
+end;
+$$;
+
+grant execute on function public.create_share_link(text) to authenticated;

@@ -48,9 +48,13 @@ import CustomizePanel, { type SelectionTag } from './CustomizePanel'
 import { AccountDrawerTop, AccountDrawerFooter } from './AccountDrawerSection'
 import { useLocale, useTr } from '../i18n'
 import { usePremium } from '../hooks/usePremium'
+import { useAuth } from '../auth/AuthContext'
+import { supabase } from '../lib/supabase'
 import { useFreeTierLimits } from '../hooks/useFreeTierLimits'
 import Paywall from './Paywall'
-import { showInterstitial, hideBanner, showBottomBanner } from '../lib/admob'
+import GestureGuide from './GestureGuide'
+import MessagePopup from './MessagePopup'
+import { hideBanner } from '../lib/admob'
 import { App, type URLOpenListenerEvent } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import { Share } from '@capacitor/share'
@@ -282,6 +286,32 @@ export default function SlimeApp() {
       // Private-mode storage error — toggle still works for the session.
     }
   }, [skeletonOn])
+  // Skeleton overlay visibility — orthogonal to `skeletonOn` so the
+  // user can keep hand TRACKING active (the pipeline runs, interactions
+  // work) while hiding the on-top joint/line DRAWING for a cleaner
+  // look. Default visible; the top-centre toggle only appears while
+  // tracking is on.
+  const [skeletonVisible, setSkeletonVisible] = useState(true)
+  const skeletonVisibleRef = useRef(skeletonVisible)
+  useEffect(() => {
+    skeletonVisibleRef.current = skeletonVisible
+  }, [skeletonVisible])
+  // Reset overlay visibility to ON every time tracking turns on so a
+  // fresh session doesn't inherit a hidden-skeleton state the user
+  // might not remember toggling.
+  useEffect(() => {
+    if (skeletonOn) setSkeletonVisible(true)
+  }, [skeletonOn])
+  // If the model fetch bombs out (timeout, network, etc.) auto-disable
+  // the feature and persist OFF so the next app launch doesn't re-run
+  // the broken load. Users have to opt back in explicitly from the
+  // panel, which stops the "every launch tries, times out, shows an
+  // error" loop that was happening on flaky networks.
+  useEffect(() => {
+    if (handStatus !== 'error') return
+    setSkeletonOn(false)
+    try { window.localStorage.setItem('wakbu-hand-tracking', 'false') } catch { /* no-op */ }
+  }, [handStatus])
   // Pending flag for the hand-detect confirmation dialog. Set when the
   // user requests to turn hand-detect ON from OFF; a confirmation
   // modal then explains the battery / heat cost and lets them commit
@@ -295,6 +325,12 @@ export default function SlimeApp() {
   // frame instead of touching both edges, while a desktop-wide viewport
   // keeps a natural ~1.0 scale.
   const sizeRef = useRef(computeInitialScale())
+  // Snapshot of the slime's starting scale so the skeleton overlay can
+  // size itself proportionally to the live mesh (pinch to shrink the
+  // slime → skeleton shrinks the same, pinch to grow → skeleton grows).
+  // Captured once; the ratio sizeRef.current / this is the live render
+  // scale factor relative to launch.
+  const initialSizeRef = useRef(sizeRef.current)
 
   // Customization state. Defaults form the entry look: white + crystal +
   // no coating, no beads, no sprinkles, no emojis — a clear glassy slime
@@ -384,6 +420,36 @@ export default function SlimeApp() {
   // Top-right menu / guide modal — both start closed, guide opens from
   // the menu, menu itself opens on button click and closes on outside tap.
   const [menuOpen, setMenuOpen] = useState(false)
+  // Gesture overlay — shown automatically on first launch and
+  // whenever the user taps the ? help button in the top bar. Both
+  // triggers open the same overlay, which self-closes after 3.5 s.
+  const GUIDE_SEEN_KEY = 'wakbu.gestureGuide.seen'
+  // Starts false so the overlay doesn't flash into existence BEFORE
+  // the slime canvas has a chance to render (previously the guide
+  // was visible on the first frame of a cold start, which read as
+  // "nothing but a dim screen with a label"). A short delayed effect
+  // flips it on once we're a few frames past mount — plenty of time
+  // for the WebGL scene to appear.
+  const GUIDE_SEEN_KEY_LOCAL = GUIDE_SEEN_KEY  // alias for closure clarity
+  const [guideOpen, setGuideOpen] = useState<boolean>(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      if (window.localStorage.getItem(GUIDE_SEEN_KEY_LOCAL) === '1') return
+    } catch {
+      return
+    }
+    const id = window.setTimeout(() => setGuideOpen(true), 900)
+    return () => window.clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const closeGuide = () => {
+    try { window.localStorage.setItem(GUIDE_SEEN_KEY, '1') } catch { /* no-op */ }
+    setGuideOpen(false)
+  }
+  // "개발자에게 메시지" popup — launched from the drawer. Composes a
+  // mailto draft so the message leaves via the user's own mail app.
+  const [messageOpen, setMessageOpen] = useState(false)
   // Scrollable unified tag row edge-fade tracking — mirrors the pattern
   // used by PrimaryChipsRow in CustomizePanel: when the row is scrolled
   // all the way to an end, drop the fade on that side so the first /
@@ -567,6 +633,12 @@ export default function SlimeApp() {
   useEffect(() => {
     browsePressedRef.current = browsePressed
   }, [browsePressed])
+  // Collection storage key is scoped to the current user so switching
+  // accounts on the same device doesn't share saved slimes. Signed-out
+  // state uses a dedicated anonymous bucket; it's wiped by sign-in
+  // (replaced by that user's bucket).
+  const { user } = useAuth()
+  const collectionStorageKey = `wakbu-collection:${user?.id ?? '__anon__'}`
   const [collection, setCollection] = useState<
     {
       id: string
@@ -578,28 +650,38 @@ export default function SlimeApp() {
        *  thumbnail feature was added. */
       thumb?: string
     }[]
-  >(() => {
-    if (typeof window === 'undefined') return []
-    try {
-      const saved = window.localStorage.getItem('wakbu-collection')
-      if (!saved) return []
-      const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed)) return parsed
-    } catch {
-      // Corrupted storage — start fresh.
-    }
-    return []
-  })
+  >([])
+  // Tracks which storage key the current `collection` state was loaded
+  // from. We only persist after this matches the active key, so a
+  // user-switch doesn't clobber the incoming user's bucket with the
+  // outgoing user's items before hydration completes.
+  const [hydratedCollectionKey, setHydratedCollectionKey] = useState<string>('')
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    let next: typeof collection = []
+    try {
+      const saved = window.localStorage.getItem(collectionStorageKey)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed)) next = parsed
+      }
+    } catch {
+      // Corrupted bucket — start fresh.
+    }
+    setCollection(next)
+    setHydratedCollectionKey(collectionStorageKey)
+  }, [collectionStorageKey])
+  useEffect(() => {
+    if (hydratedCollectionKey !== collectionStorageKey) return
     try {
       window.localStorage.setItem(
-        'wakbu-collection',
+        collectionStorageKey,
         JSON.stringify(collection)
       )
     } catch {
       // Private-mode storage error — collection still works for the session.
     }
-  }, [collection])
+  }, [collection, collectionStorageKey, hydratedCollectionKey])
   // One-shot migration for pre-PNG saves: old thumbnails were saved as
   // JPEG which fills the transparent WebGL bg with pure black, creating
   // a visible dark rectangle around each slime that doesn't match the
@@ -680,75 +762,14 @@ export default function SlimeApp() {
   }
   // Auto-press mode — when engaged, the render loop injects synthetic
   // press tips at pseudo-random points on the front hemisphere with a
-  // rhythmic envelope, so the slime squishes on its own for a fixed
-  // duration. `startAt` seeds the cycle timer + PRNG; `endAt` bounds
-  // the session. UI badge (`autoPressOn`) mirrors the ref for the
-  // button's active state and gets flipped off from inside the loop
-  // when the deadline passes.
-  // Developer-set fallback default; user can override + persist via
-  // the countdown pill's edit modal (kept in localStorage under
-  // `wakbu-auto-default-ms`).
-  const AUTO_PRESS_DEFAULT_MS = 10000
-  const [autoPressDefaultMs, setAutoPressDefaultMs] = useState<number>(
-    () => {
-      try {
-        const raw = window.localStorage.getItem('wakbu-auto-default-ms')
-        const n = raw ? Number(raw) : NaN
-        if (Number.isFinite(n) && n > 0 && n <= 3600 * 1000) return n
-      } catch {
-        // private mode / storage error — fall through to default.
-      }
-      return AUTO_PRESS_DEFAULT_MS
-    }
-  )
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        'wakbu-auto-default-ms',
-        String(autoPressDefaultMs)
-      )
-    } catch {
-      // ignore
-    }
-  }, [autoPressDefaultMs])
+  // rhythmic envelope, so the slime squishes on its own until the user
+  // cancels. `startAt` seeds the cycle timer + PRNG; `endAt` is kept
+  // for the per-frame spawn gate — set to Infinity while active, 0 to
+  // stop. UI badge (`autoPressOn`) mirrors the ref for the button's
+  // active state and only flips off from the toggle button itself.
   const [autoPressOn, setAutoPressOn] = useState(false)
   const autoPressStartRef = useRef(0)
   const autoPressEndAtRef = useRef(0)
-  // Top-of-screen countdown pill state — remaining ms is polled from
-  // an interval that also flips `autoPressOn` off once the deadline
-  // lapses (previously handled by a setTimeout keyed to the fixed
-  // duration; now the duration can change mid-session so polling is
-  // simpler than reshuffling timers).
-  const [autoPressRemainingMs, setAutoPressRemainingMs] = useState(0)
-  // Time-edit modal — opens when the user taps the countdown pill.
-  // Local edit values decouple the picker from the live session so
-  // the user can dial without disturbing the running countdown.
-  const [autoTimeOpen, setAutoTimeOpen] = useState(false)
-  const [autoTimeEditMin, setAutoTimeEditMin] = useState(0)
-  const [autoTimeEditSec, setAutoTimeEditSec] = useState(10)
-  const [autoSaveAsDefault, setAutoSaveAsDefault] = useState(false)
-  // Poll the deadline while a session is active: updates the countdown
-  // display each tick and flips `autoPressOn` off the instant the
-  // remaining time hits zero. Interval-based instead of a setTimeout
-  // so mid-session duration edits (via the picker) don't need timer
-  // reshuffling — the next tick just reads the fresh endAt.
-  useEffect(() => {
-    if (!autoPressOn) return
-    const tick = () => {
-      const remaining = autoPressEndAtRef.current - performance.now()
-      if (remaining <= 0) {
-        autoPressEndAtRef.current = 0
-        autoPressNextAtRef.current = Number.POSITIVE_INFINITY
-        setAutoPressRemainingMs(0)
-        setAutoPressOn(false)
-        return
-      }
-      setAutoPressRemainingMs(remaining)
-    }
-    tick()
-    const id = window.setInterval(tick, 200)
-    return () => window.clearInterval(id)
-  }, [autoPressOn])
   // Currently in-flight synthetic presses. Each entry lives out its
   // own duration/envelope independently, so overlapping "flurries" and
   // isolated pokes can coexist. Purged as they finish. Kept as plain
@@ -827,13 +848,13 @@ export default function SlimeApp() {
   // z-index can't make the drawer render above it. Restore the banner
   // when the drawer closes (free tier only — premium users never had
   // one in the first place).
+  // TEMPORARY: ads are off while payments are disabled — don't call
+  // showBottomBanner here either. Keep the effect in place so the full
+  // flow is a one-line revert when re-enabling. See AdBanner.tsx.
   useEffect(() => {
-    if (isPremium) return
-    if (menuOpen) {
-      void hideBanner()
-    } else {
-      void showBottomBanner()
-    }
+    void hideBanner()
+    // if (isPremium) return
+    // if (menuOpen) { void hideBanner() } else { void showBottomBanner() }
   }, [menuOpen, isPremium])
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     if (typeof window === 'undefined') return 'dark'
@@ -1211,6 +1232,27 @@ export default function SlimeApp() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [])
 
+  // Universal option-history undo. Every change to a customisation
+  // state pushes the PREVIOUS snapshot onto the stack so the user can
+  // step back one action at a time — including the tag-reset. Capped
+  // at 50 entries so the stack doesn't grow unbounded during long
+  // editing sessions.
+  const [undoStack, setUndoStack] = useState<unknown[]>([])
+  const prevStateRef = useRef<unknown>(null)
+  // When true, the next state-watch tick is swallowed so we don't push
+  // the state that WE just restored (undo) back onto the stack. Starts
+  // true to also skip the initial render's "transition from undefined
+  // to defaults" false positive.
+  const skipHistoryRef = useRef(true)
+  // Debounce burst — slider / stepper drags fire many updates in a row.
+  // Instead of pushing each intermediate, we treat the whole burst as a
+  // single history step: the first change in a burst captures the
+  // pre-burst state in `burstStartRef`; subsequent changes within 400ms
+  // just reset the push timer. When the user stops moving for 400ms,
+  // the pending timer fires and pushes burstStartRef.
+  const burstStartRef = useRef<unknown>(null)
+  const burstTimerRef = useRef<number | null>(null)
+
   const resetToDefaults = () => {
     setColors([])
     setMaterial('crystal')
@@ -1244,6 +1286,73 @@ export default function SlimeApp() {
     // showing controls for options that no longer differ from default.
     openCategoryRef.current?.(null)
   }
+
+  const undoLastAction = () => {
+    if (undoStack.length === 0) return
+    const prev = undoStack[undoStack.length - 1]
+    skipHistoryRef.current = true
+    // Cancel any pending slider-burst push — otherwise the mid-drag
+    // state we never want to see as a history step would still land
+    // right after the undo.
+    if (burstTimerRef.current !== null) {
+      window.clearTimeout(burstTimerRef.current)
+      burstTimerRef.current = null
+      burstStartRef.current = null
+    }
+    setUndoStack((stack) => stack.slice(0, -1))
+    applyStateSnapshot(prev)
+  }
+
+  useEffect(() => {
+    // Watch every piece of customisation state. The first tick lands
+    // on skipHistoryRef=true (initial render) and primes prevStateRef
+    // without recording. Each later tick either starts a new burst
+    // (captures pre-burst state) or extends the pending burst by
+    // resetting its timer.
+    const current = buildStateSnapshot()
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false
+      prevStateRef.current = current
+      return
+    }
+    // First change in a burst → remember what the world looked like
+    // BEFORE the burst started so the eventual push restores the full
+    // "pre-drag" snapshot.
+    if (burstTimerRef.current === null) {
+      burstStartRef.current = prevStateRef.current
+    }
+    if (burstTimerRef.current !== null) {
+      window.clearTimeout(burstTimerRef.current)
+    }
+    burstTimerRef.current = window.setTimeout(() => {
+      const snap = burstStartRef.current
+      if (snap) {
+        setUndoStack((stack) => {
+          const next = [...stack, snap]
+          return next.length > 50 ? next.slice(next.length - 50) : next
+        })
+      }
+      burstStartRef.current = null
+      burstTimerRef.current = null
+    }, 400)
+    prevStateRef.current = current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    colors,
+    material,
+    coating,
+    coatingColors,
+    foilColors,
+    shape,
+    beads,
+    sprinkles,
+    emojiBeads,
+    innerSlime,
+    customBeads,
+    crunchOn,
+    slimeText,
+    colorAdjustments
+  ])
 
   // Encode the full customisation into the URL so a shared link lands the
   // recipient on the exact same slime the sender was playing with. JSON
@@ -1498,19 +1607,45 @@ export default function SlimeApp() {
     })
   }
 
-  const encodeShareUrlFromState = (state: unknown): string => {
+  // Encode state → URL-safe base64 blob (the raw payload stored in the
+  // shortener table). Shared with the direct-?d= legacy path so one-shot
+  // local fallbacks still decode on the receiving side.
+  const encodeStatePayload = (state: unknown): string => {
     const json = JSON.stringify(state)
-    const b64 = btoa(unescape(encodeURIComponent(json)))
+    return btoa(unescape(encodeURIComponent(json)))
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=+$/, '')
-    // Public landing page as the share base so the link opens cleanly on
-    // ANY device (recipient's browser if the app isn't installed; the app
-    // itself if the custom-scheme redirect in the landing page fires).
-    // window.location on native is https://localhost — useless to share.
-    return `https://parkyoonha.github.io/slime/landing/?d=${b64}`
   }
-  const encodeShareUrl = (): string =>
+  const LANDING_BASE = 'https://grttihat.github.io/slime/landing/'
+  // Shortened share link. Mints a share_links row via Supabase RPC and
+  // returns a ~40-char URL. Falls back to the legacy `?d=` direct-blob
+  // URL if the RPC fails (no network / Supabase down / user logged out)
+  // so sharing never hard-fails. Chat apps like KakaoTalk refuse to
+  // fetch OG previews when the URL is huge, so the short form matters.
+  const encodeShareUrlFromState = async (state: unknown): Promise<string> => {
+    const payload = encodeStatePayload(state)
+    try {
+      const { data, error } = await supabase.rpc('create_share_link', { p_payload: payload })
+      if (error) {
+        console.warn('[share] create_share_link error:', error)
+        setToast(`단축 실패: ${error.message || error.code || 'unknown'}`)
+        window.setTimeout(() => setToast(null), 4000)
+        throw error
+      }
+      const code = typeof data === 'string' ? data : null
+      if (code && code.length > 0) {
+        return `${LANDING_BASE}?s=${code}`
+      }
+      console.warn('[share] create_share_link returned no code, data=', data)
+      setToast(`단축 실패: 코드 없음 (data=${JSON.stringify(data)})`)
+      window.setTimeout(() => setToast(null), 4000)
+    } catch (e) {
+      console.warn('[share] rpc threw:', e)
+    }
+    return `${LANDING_BASE}?d=${payload}`
+  }
+  const encodeShareUrl = (): Promise<string> =>
     encodeShareUrlFromState(buildStateSnapshot())
 
   // Collection helpers — save current design under a user-provided
@@ -1545,10 +1680,10 @@ export default function SlimeApp() {
       const pendingThumb = nameDialog.pendingThumb
       // Close the dialog first so the interstitial doesn't overlap it.
       setNameDialog(null)
-      // Free users watch an interstitial to save; premium users skip.
-      // showInterstitial is resilient — it resolves on failure too, so a
-      // broken fill never permanently blocks save.
-      if (!isPremium) await showInterstitial()
+      // TEMPORARY: interstitial disabled alongside the banner while
+      // payments are off. Re-enable alongside AdBanner.tsx when the
+      // paywall ships.
+      // if (!isPremium) await showInterstitial()
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       setCollection((prev) => [
         ...prev,
@@ -1628,15 +1763,13 @@ export default function SlimeApp() {
     }
     const entry = collection.find((c) => c.id === id)
     if (!entry) return
-    const url = encodeShareUrlFromState(entry.state)
-    const payload = {
-      title: 'soundslime',
-      text: `${entry.name} 만들어봤어!`,
-      url
-    }
+    const url = await encodeShareUrlFromState(entry.state)
+    // URL-only payload — same reason as handleShare(): title / text
+    // fields turn KakaoTalk's share into a plain-text message instead
+    // of a link-preview card.
     try {
       if (typeof navigator !== 'undefined' && 'share' in navigator) {
-        await navigator.share(payload)
+        await navigator.share({ url })
         incrementShare()
         return
       }
@@ -1695,21 +1828,20 @@ export default function SlimeApp() {
       setPaywallOpen(true)
       return
     }
-    const url = encodeShareUrl()
-    const title = 'soundslime'
+    const url = await encodeShareUrl()
 
-    // Native Android share sheet — share ONLY the URL. Including a
-    // separate `text` field causes KakaoTalk (and some other chat apps)
-    // to render the message as plain text with the URL inlined — the
-    // full base64 payload becomes a wall of characters in the chat.
-    // URL-only lets the chat app fetch the destination's Open Graph
-    // meta (og:title / og:description / og:image) and render a compact
-    // link-preview card: thumbnail + short caption + domain. The OG
-    // meta is served from landing/index.html.
+    // Native Android share sheet — share ONLY the URL. Any `title` /
+    // `text` field causes KakaoTalk (and some other chat apps) to
+    // render the share as a plain-text message ("title — url") instead
+    // of fetching the destination's Open Graph meta and showing a
+    // thumbnail + caption link-preview card. The OG meta
+    // (og:title / og:image, served from landing/index.html) only kicks
+    // in when the chat app receives a bare URL. `dialogTitle` is
+    // SAFE — it names the Android picker sheet, not the outgoing
+    // message content.
     if (Capacitor.isNativePlatform()) {
       try {
         await Share.share({
-          title,
           url,
           dialogTitle: tr('슬라임 공유하기')
         })
@@ -1724,7 +1856,7 @@ export default function SlimeApp() {
     // Web fallback: Web Share API if available (desktop Safari, etc.)
     try {
       if (typeof navigator !== 'undefined' && 'share' in navigator) {
-        await navigator.share({ title, url })
+        await navigator.share({ url })
         incrementShare()
         return
       }
@@ -1749,25 +1881,45 @@ export default function SlimeApp() {
   // start via `?d=` in window.location) and the appUrlOpen listener
   // (warm start when the app is already running and the OS routes a
   // shared link into it).
-  const applySharedUrl = (urlOrSearch: string) => {
+  const applyPayload = (payload: string) => {
+    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const json = decodeURIComponent(escape(atob(b64)))
+    applyStateSnapshot(JSON.parse(json))
+    // Shared-link recipients land with the options panel COLLAPSED so
+    // they see the sender's slime front-and-center. One tap on the
+    // options toggle opens the full panel if they want to tweak.
+    setPanelCollapsed(true)
+    setToast(tr('공유받은 슬라임을 불러왔어요'))
+    window.setTimeout(() => setToast(null), 2000)
+  }
+
+  const applySharedUrl = async (urlOrSearch: string) => {
     try {
       let d: string | null = null
+      let s: string | null = null
       try {
         const u = new URL(urlOrSearch)
         d = u.searchParams.get('d')
+        s = u.searchParams.get('s')
       } catch {
-        d = new URLSearchParams(urlOrSearch).get('d')
+        const q = new URLSearchParams(urlOrSearch)
+        d = q.get('d')
+        s = q.get('s')
       }
-      if (!d) return
-      const b64 = d.replace(/-/g, '+').replace(/_/g, '/')
-      const json = decodeURIComponent(escape(atob(b64)))
-      applyStateSnapshot(JSON.parse(json))
-      // Shared-link recipients land with the options panel COLLAPSED so
-      // they see the sender's slime front-and-center. One tap on the
-      // options toggle opens the full panel if they want to tweak.
-      setPanelCollapsed(true)
-      setToast(tr('공유받은 슬라임을 불러왔어요'))
-      window.setTimeout(() => setToast(null), 2000)
+      if (d) {
+        applyPayload(d)
+        return
+      }
+      if (s && /^[A-Za-z0-9_-]+$/.test(s)) {
+        const { data, error } = await supabase
+          .from('share_links')
+          .select('payload')
+          .eq('code', s)
+          .maybeSingle()
+        if (error || !data?.payload) return
+        applyPayload(data.payload)
+        return
+      }
     } catch {
       // Ignore invalid share params — user still gets a working slime.
     }
@@ -1803,7 +1955,57 @@ export default function SlimeApp() {
       removed = true
       void handle?.remove()
     }
-  }, [])
+  }, [collection])
+
+  // Cold-start: when launched by the OS via a shared URL, the launch
+  // URL is only retrievable via App.getLaunchUrl() — there's no live
+  // appUrlOpen event in that case.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let cancelled = false
+    void App.getLaunchUrl().then((res) => {
+      if (cancelled || !res?.url) return
+      if (res.url.startsWith('io.wakbu.slime://auth')) return
+      applySharedUrl(res.url)
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collection])
+
+  // Hardware back button (Android): without an explicit handler Capacitor
+  // falls through to the OS default (minimises / exits the app). Instead,
+  // pop whatever UI is currently open — modal → drawer → collection grid
+  // → browse view → collection carousel. Only when nothing is on top do
+  // we let the back press leave the app.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return
+    let removed = false
+    let handle: { remove: () => Promise<void> } | null = null
+    App.addListener('backButton', () => {
+      if (nameDialog) { setNameDialog(null); return }
+      if (handDetectPending) { setHandDetectPending(false); return }
+      if (menuOpen) { setMenuOpen(false); return }
+      if (collectionOpen) { setCollectionOpen(false); return }
+      if (browseIdx !== null) { setBrowseIdx(null); return }
+      if (bottomMode === 'collection') { setBottomMode('options'); return }
+      if (!panelCollapsed) { setPanelCollapsed(true); return }
+      void App.exitApp()
+    }).then((h) => {
+      if (removed) { void h.remove() } else { handle = h }
+    })
+    return () => {
+      removed = true
+      void handle?.remove()
+    }
+  }, [
+    nameDialog,
+    handDetectPending,
+    menuOpen,
+    collectionOpen,
+    browseIdx,
+    bottomMode,
+    panelCollapsed
+  ])
 
   // Sound engine — created lazily; kick off sample fetch/decode as soon as
   // the component mounts so the audio pool is ready by the time the user
@@ -2524,12 +2726,14 @@ export default function SlimeApp() {
       setCustomBeadsPhoto: (texture) => customBeadsLayer.setPhoto(texture),
       reset: () => {
         slime.reset()
-        // Snap the slime back to its default orientation on any reset
-        // (press-reset button or unified-tag reset) so the slime
-        // returns to the same pose as a fresh mount, not whatever
-        // rotation the user had spun it into. Kill any active
-        // auto-spin timer too so the reset feels clean.
-        slime.mesh.quaternion.identity()
+        // Snap the slime back to its SHAPE's canonical pose, not
+        // identity — a cube / rect was first applied at a 3/4 hero
+        // angle, so returning to identity after a reset would face the
+        // user flat with a single face (the exact "straight-on" look
+        // the user never saw during customization). The helper picks
+        // identity for symmetric shapes (sphere / twist). Kill any
+        // active auto-spin timer too so the reset feels clean.
+        slime.applyDefaultOrientation()
         autoSpinUntilRef.current = 0
         // Wipe any accumulated per-bead crack damage — otherwise a
         // reset restores the slime shape but leaves coated chunk
@@ -3231,8 +3435,10 @@ export default function SlimeApp() {
     // true aspect ratio without letting it fill the whole canvas (cover)
     // or shrink into a tiny letterbox strip (contain). Uses `contain`
     // semantics + a uniform scale factor around center — the hand stays
-    // aspect-correct AND at a comfortable visible size.
-    const HAND_SCALE = 1.25
+    // aspect-correct AND at a comfortable visible size. The skeleton
+    // overlay then scales further with the live slime size (pinch /
+    // UI slider) so the drawn hand grows and shrinks alongside the ball.
+    const HAND_SCALE_BASE = 1.25
     const mapVidToScreen = (
       lx: number,
       ly: number
@@ -3253,16 +3459,28 @@ export default function SlimeApp() {
         sx = (lx - 0.5) * displayW + 0.5
         sy = ly
       }
+      // Live scale factor relative to the initial slime size. Clamped so
+      // extreme pinches don't push the skeleton off-screen or shrink it
+      // to invisible.
+      const slimeRatio = Math.max(
+        0.5,
+        Math.min(2.0, sizeRef.current / (initialSizeRef.current || 1))
+      )
+      const handScale = HAND_SCALE_BASE * slimeRatio
       return [
-        (sx - 0.5) * HAND_SCALE + 0.5,
-        (sy - 0.5) * HAND_SCALE + 0.5
+        (sx - 0.5) * handScale + 0.5,
+        (sy - 0.5) * handScale + 0.5
       ]
     }
 
     const drawSkeleton = () => {
       if (!overlay || !overlayCtx) return
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
-      if (!skeletonOnRef.current || latestHands.length === 0) return
+      if (
+        !skeletonOnRef.current ||
+        !skeletonVisibleRef.current ||
+        latestHands.length === 0
+      ) return
 
       const w = overlay.width
       const h = overlay.height
@@ -4450,13 +4668,14 @@ export default function SlimeApp() {
         const t = (autoSpinUntilRef.current - nowMs) / 600
         spinShrink = 1 + 0.35 * Math.max(0, Math.min(1, t))
       }
-      // When hand tracking is on, the slime should fill more of the
-      // frame (slightly overflowing) so finger presses have more room
-      // to land on it. Shrinks back to normal when the user disables
-      // tracking.
-      const handTrackingScale = skeletonOnRef.current ? 1.6 : 1
+      // Hand tracking mode no longer forces an extra 1.6× scale — the
+      // user controls size via pinch / UI slider, and the hard-coded
+      // multiplier was overriding "shrink" gestures (user complaint:
+      // "손 감지모드 시 슬라임 축소가 일반모드에서만큼 안돼"). Scale is
+      // now identical to normal mode so the pinch-out behaves the same
+      // whether hand tracking is on or off.
       slime.mesh.scale.setScalar(
-        currentScale * currentPanelScale * browseScale * spinShrink * handTrackingScale
+        currentScale * currentPanelScale * browseScale * spinShrink
       )
 
       // Carousel slide — offset mesh.position.x during the browse
@@ -4574,6 +4793,35 @@ export default function SlimeApp() {
         style={isEmptyCollection ? { visibility: 'hidden' } : undefined}
       />
 
+
+      {/* Mid-BOTTOM: tag-reset undo. Only mounts the moment after the
+          user hits the unified tag reset — a one-tap safety net to
+          recover from an accidental reset. Disappears automatically on
+          any subsequent option change. */}
+      {/* Top-CENTRE: skeleton overlay visibility toggle. Only mounts
+          while hand tracking is on so a user who's never enabled hand
+          tracking never sees this control. Hides behind the other
+          overlays (browse / collection) to avoid competing with their
+          chrome. */}
+      {skeletonOn && browseIdx === null && bottomMode !== 'collection' && (
+        <div className={styles.topCenterBar} data-hud>
+          <button
+            type="button"
+            className={styles.skeletonVisToggle}
+            onClick={() => setSkeletonVisible((v) => !v)}
+            aria-pressed={!skeletonVisible}
+            aria-label={
+              skeletonVisible
+                ? locale === 'ko' ? '스켈레톤 숨기기' : 'Hide skeleton'
+                : locale === 'ko' ? '스켈레톤 표시' : 'Show skeleton'
+            }
+          >
+            {skeletonVisible
+              ? locale === 'ko' ? '스켈레톤 끄기' : 'Hide skeleton'
+              : locale === 'ko' ? '스켈레톤 켜기' : 'Show skeleton'}
+          </button>
+        </div>
+      )}
 
       {/* Top-LEFT cluster hosts the hamburger menu (moved from the
           top-right); paired with the top-right 공유 button, this puts
@@ -4767,6 +5015,33 @@ export default function SlimeApp() {
                   </button>
                 </div>
               </div>
+              <button
+                type="button"
+                className={styles.drawerItem}
+                onClick={() => {
+                  setMenuOpen(false)
+                  setMessageOpen(true)
+                }}
+              >
+                <span>
+                  {locale === 'ko'
+                    ? '개발자에게 메시지'
+                    : 'Message the developer'}
+                </span>
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 4h16v14H5.17L4 19.17z" />
+                </svg>
+              </button>
             </nav>
             <div className={styles.drawerFooter}>
               <AccountDrawerFooter onCloseDrawer={() => setMenuOpen(false)} />
@@ -5189,143 +5464,8 @@ export default function SlimeApp() {
         </div>
       )}
 
-      {autoPressOn && (() => {
-        const totalSec = Math.max(0, Math.ceil(autoPressRemainingMs / 1000))
-        const mm = String(Math.floor(totalSec / 60)).padStart(2, '0')
-        const ss = String(totalSec % 60).padStart(2, '0')
-        return (
-          <button
-            type="button"
-            className={styles.autoCountdown}
-            data-hud
-            onClick={() => {
-              const remaining = Math.max(
-                0,
-                autoPressEndAtRef.current - performance.now()
-              )
-              const secTotal =
-                remaining > 0
-                  ? Math.max(1, Math.round(remaining / 1000))
-                  : Math.max(1, Math.round(autoPressDefaultMs / 1000))
-              setAutoTimeEditMin(Math.floor(secTotal / 60))
-              setAutoTimeEditSec(secTotal % 60)
-              setAutoSaveAsDefault(false)
-              setAutoTimeOpen(true)
-            }}
-            aria-label={tr('자동 압박 남은 시간 (탭하여 조정)')}
-          >
-            {mm}:{ss}
-          </button>
-        )
-      })()}
-
-      {autoTimeOpen && (
-        <div
-          className={styles.modalBackdrop}
-          onClick={() => setAutoTimeOpen(false)}
-        >
-          <div
-            className={styles.modal}
-            data-hud
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className={styles.modalTitle}>자동 압박 시간</div>
-            <div className={styles.autoTimeRow}>
-              <div className={styles.autoTimeStepper}>
-                <button
-                  type="button"
-                  className={styles.autoTimeBtn}
-                  onClick={() =>
-                    setAutoTimeEditMin((v) => Math.max(0, v - 1))
-                  }
-                  aria-label={tr('분 감소')}
-                >
-                  −
-                </button>
-                <span className={styles.autoTimeValue}>
-                  {String(autoTimeEditMin).padStart(2, '0')}
-                </span>
-                <button
-                  type="button"
-                  className={styles.autoTimeBtn}
-                  onClick={() =>
-                    setAutoTimeEditMin((v) => Math.min(59, v + 1))
-                  }
-                  aria-label={tr('분 증가')}
-                >
-                  +
-                </button>
-                <div className={styles.autoTimeUnit}>분</div>
-              </div>
-              <div className={styles.autoTimeStepper}>
-                <button
-                  type="button"
-                  className={styles.autoTimeBtn}
-                  onClick={() =>
-                    setAutoTimeEditSec((v) => Math.max(0, v - 1))
-                  }
-                  aria-label={tr('초 감소')}
-                >
-                  −
-                </button>
-                <span className={styles.autoTimeValue}>
-                  {String(autoTimeEditSec).padStart(2, '0')}
-                </span>
-                <button
-                  type="button"
-                  className={styles.autoTimeBtn}
-                  onClick={() =>
-                    setAutoTimeEditSec((v) => Math.min(59, v + 1))
-                  }
-                  aria-label={tr('초 증가')}
-                >
-                  +
-                </button>
-                <div className={styles.autoTimeUnit}>초</div>
-              </div>
-            </div>
-            <label className={styles.autoTimeSaveRow}>
-              <input
-                type="checkbox"
-                checked={autoSaveAsDefault}
-                onChange={(e) => setAutoSaveAsDefault(e.target.checked)}
-              />
-              <span>기본값으로 저장</span>
-            </label>
-            <div className={styles.nameDialogActions}>
-              <button
-                type="button"
-                className={styles.modalClose}
-                onClick={() => setAutoTimeOpen(false)}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                className={styles.nameDialogSaveBtn}
-                onClick={() => {
-                  const totalMs =
-                    (autoTimeEditMin * 60 + autoTimeEditSec) * 1000
-                  if (totalMs <= 0) {
-                    setAutoTimeOpen(false)
-                    return
-                  }
-                  if (autoSaveAsDefault) {
-                    setAutoPressDefaultMs(totalMs)
-                  }
-                  // Retarget the current session's deadline so the
-                  // countdown pill immediately reflects the new value.
-                  autoPressEndAtRef.current = performance.now() + totalMs
-                  setAutoPressRemainingMs(totalMs)
-                  setAutoTimeOpen(false)
-                }}
-              >
-                확인
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <GestureGuide open={guideOpen} onClose={closeGuide} />
+      <MessagePopup open={messageOpen} onClose={() => setMessageOpen(false)} />
 
       {/* 수정하기 save-confirm dialog. */}
       {handDetectPending && (
@@ -5338,10 +5478,13 @@ export default function SlimeApp() {
             data-hud
             onClick={(e) => e.stopPropagation()}
           >
-            <div className={styles.modalTitle}>손 감지를 켤까요?</div>
+            <div className={styles.modalTitle}>
+              {locale === 'ko' ? '손 감지를 켤까요?' : 'Turn on hand detection?'}
+            </div>
             <p className={styles.modalList}>
-              카메라와 손 인식 모델이 계속 돌아가면서 배터리 소모와
-              발열이 늘어날 수 있어요.
+              {locale === 'ko'
+                ? '카메라와 손 인식 모델이 계속 돌아가면서 배터리 소모와 발열이 늘어날 수 있어요.'
+                : 'Keeping the camera and hand detection model running can increase battery drain and device heat.'}
             </p>
             <div className={styles.nameDialogActions}>
               <button
@@ -5349,7 +5492,7 @@ export default function SlimeApp() {
                 className={styles.modalClose}
                 onClick={() => setHandDetectPending(false)}
               >
-                취소
+                {locale === 'ko' ? '취소' : 'Cancel'}
               </button>
               <button
                 type="button"
@@ -5359,7 +5502,7 @@ export default function SlimeApp() {
                   setSkeletonOn(true)
                 }}
               >
-                켜기
+                {locale === 'ko' ? '켜기' : 'Turn on'}
               </button>
             </div>
           </div>
@@ -5468,6 +5611,7 @@ export default function SlimeApp() {
             type="button"
             className={styles.sideBtn}
             data-active={!panelCollapsed}
+            data-flat="true"
             onClick={() => setPanelCollapsed((v) => !v)}
             aria-label={panelCollapsed ? tr('옵션 열기') : tr('옵션 닫기')}
             aria-pressed={!panelCollapsed}
@@ -5490,8 +5634,9 @@ export default function SlimeApp() {
           </button>
           <button
             type="button"
-            className={styles.sideBtn}
+            className={`${styles.sideBtn} ${styles.autoBtn}`}
             data-active={skeletonOn}
+            data-flat="true"
             onClick={() => {
               if (skeletonOn) {
                 setSkeletonOn(false)
@@ -5507,53 +5652,24 @@ export default function SlimeApp() {
             aria-pressed={skeletonOn}
           >
             <svg
-              width="24"
-              height="24"
+              width="22"
+              height="22"
               viewBox="0 0 56 56"
               fill="currentColor"
             >
               <path d="M 2.1952 36.8945 C 3.0156 36.8711 3.6015 36.2383 3.6250 35.3945 C 3.8828 25.1992 9.1328 17.6523 17.1015 14.6992 L 22.5625 29.6992 C 22.6093 29.8164 22.5859 29.9101 22.4687 29.9570 C 22.3749 30.0039 22.3046 29.9570 22.2343 29.8867 L 19.4687 26.8867 C 17.6640 24.9414 15.3671 24.8008 13.5859 26.3008 C 11.5703 28.0117 11.5468 30.5664 13.5156 32.9805 L 21.3671 42.4727 C 27.2968 49.6445 34.2578 51.8711 42.0390 49.0352 C 51.3438 45.6602 55.3047 37.1289 51.5545 26.8164 L 49.7967 22.0117 C 47.9689 16.9258 44.4765 14.8398 40.3749 16.2695 C 39.2734 14.8398 37.5859 14.3477 35.7578 15.0039 C 35.1250 15.2383 34.5156 15.5899 33.9296 16.0352 C 32.7343 14.4883 30.8828 13.9258 28.9609 14.6055 C 28.4452 14.7930 27.9530 15.0742 27.4843 15.4023 L 24.8125 8.0899 C 23.8046 5.3008 21.2734 4.1289 18.6718 5.0664 C 16.0468 6.0274 14.8749 8.5352 15.8828 11.3242 L 16.0703 11.8398 C 6.9999 15.2383 .6953 23.9805 .6953 35.3477 C .6953 36.1914 1.3984 36.9179 2.1952 36.8945 Z M 41.0312 45.9648 C 34.8906 48.2148 29.1250 47.0664 23.7109 40.5274 L 15.8593 31.0820 C 15.0156 30.0977 15.0156 29.1367 15.7656 28.4805 C 16.4687 27.8477 17.4296 28.0586 18.2030 28.8555 L 23.6171 34.4570 C 24.5312 35.3945 25.3281 35.4883 26.1015 35.2070 C 27.0156 34.8789 27.4140 33.8945 27.0390 32.8867 L 18.7421 10.0586 C 18.3906 9.1211 18.8125 8.2305 19.7030 7.9023 C 20.6171 7.5742 21.4609 8.0195 21.8125 8.9570 L 27.7421 25.2461 C 28.0234 26.0195 28.8906 26.3711 29.6640 26.0899 C 30.4140 25.8086 30.8125 24.9883 30.5312 24.2383 L 28.3984 18.3555 C 28.7265 18.0508 29.1718 17.7461 29.6171 17.5820 C 30.7187 17.1836 31.6328 17.6758 32.0546 18.8242 L 33.9296 23.9570 C 34.2109 24.7539 35.0781 25.0586 35.8281 24.7774 C 36.5546 24.5195 37.0234 23.7461 36.7187 22.9258 L 35.1952 18.7774 C 35.5234 18.4492 35.9687 18.1445 36.4140 17.9805 C 37.5156 17.5820 38.4296 18.0742 38.8515 19.2227 L 40.0937 22.6445 C 40.3984 23.4648 41.2656 23.7695 42.0156 23.4883 C 42.7421 23.2305 43.1874 22.4336 42.9062 21.6367 L 41.9687 19.1055 C 43.9374 18.4023 45.7892 19.9961 47.0545 23.5117 L 48.5310 27.5195 C 51.7422 36.3789 48.8123 43.1289 41.0312 45.9648 Z" />
             </svg>
+            <span className={styles.autoBtnLabel}>hand</span>
           </button>
           <button
             type="button"
             className={styles.sideBtn}
-            data-active={autoPressOn}
-            onClick={() => {
-              // Re-click during a session = immediate cancel. Stop
-              // spawning and drop any in-flight presses; the badge
-              // is cleared by the countdown effect on next tick.
-              if (autoPressOn) {
-                autoPressEndAtRef.current = 0
-                autoPressNextAtRef.current = Number.POSITIVE_INFINITY
-                autoPressActivesRef.current = []
-                setAutoPressOn(false)
-                setAutoPressRemainingMs(0)
-                return
-              }
-              const now = performance.now()
-              autoPressStartRef.current = now
-              // Fresh session opens at the user-persisted default
-              // duration; the countdown pill lets them retune on the
-              // fly (and optionally save the new value as default).
-              autoPressEndAtRef.current = now + autoPressDefaultMs
-              setAutoPressRemainingMs(autoPressDefaultMs)
-              // Fresh session: clear any stragglers from a prior run
-              // and fire the first press immediately.
-              autoPressActivesRef.current = []
-              autoPressNextAtRef.current = now
-              // Auto-play counts as a "fresh press" for the wax two-
-              // stage envelope, so re-arm the Wax4 attack; it'll fire
-              // on the first synthetic press this session lands.
-              waxAttackPendingRef.current = true
-              setAutoPressOn(true)
-            }}
-            aria-label={autoPressOn ? tr('자동 압박 중') : tr('자동 압박 시작')}
-            aria-pressed={autoPressOn}
-            title={tr('자동 압박')}
+            data-dim={undoStack.length === 0 || undefined}
+            onClick={undoLastAction}
+            disabled={undoStack.length === 0}
+            aria-label={locale === 'ko' ? '이전으로' : 'Undo'}
+            title={locale === 'ko' ? '이전으로' : 'Undo'}
           >
-            {/* Concentric ripples — reads as "auto tapping / press
-                waves". Center dot is the tap, rings are the pulse. */}
             <svg
               width="22"
               height="22"
@@ -5563,10 +5679,10 @@ export default function SlimeApp() {
               strokeWidth="1.8"
               strokeLinecap="round"
               strokeLinejoin="round"
+              aria-hidden="true"
             >
-              <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
-              <circle cx="12" cy="12" r="6" opacity="0.6" />
-              <circle cx="12" cy="12" r="10" opacity="0.3" />
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="11 18 5 12 11 6" />
             </svg>
           </button>
           <button
@@ -5590,6 +5706,58 @@ export default function SlimeApp() {
             >
               <path d="M64,256H34A222,222,0,0,1,430,118.15V85h30V190H355V160h67.27A192.21,192.21,0,0,0,256,64C150.13,64,64,150.13,64,256Zm384,0c0,105.87-86.13,192-192,192A192.21,192.21,0,0,1,89.73,352H157V322H52V427H82V393.85A222,222,0,0,0,478,256Z" />
             </svg>
+          </button>
+          <button
+            type="button"
+            className={`${styles.sideBtn} ${styles.autoBtn}`}
+            data-active={autoPressOn}
+            data-flat="true"
+            onClick={() => {
+              // Re-click during a session = immediate cancel. Stop
+              // spawning and drop any in-flight presses.
+              if (autoPressOn) {
+                autoPressEndAtRef.current = 0
+                autoPressNextAtRef.current = Number.POSITIVE_INFINITY
+                autoPressActivesRef.current = []
+                setAutoPressOn(false)
+                return
+              }
+              const now = performance.now()
+              autoPressStartRef.current = now
+              // No time limit — the loop runs until the user taps the
+              // button again. Infinity keeps the spawn gate open.
+              autoPressEndAtRef.current = Number.POSITIVE_INFINITY
+              // Fresh session: clear any stragglers from a prior run
+              // and fire the first press immediately.
+              autoPressActivesRef.current = []
+              autoPressNextAtRef.current = now
+              // Auto-play counts as a "fresh press" for the wax two-
+              // stage envelope, so re-arm the Wax4 attack; it'll fire
+              // on the first synthetic press this session lands.
+              waxAttackPendingRef.current = true
+              setAutoPressOn(true)
+            }}
+            aria-label={autoPressOn ? tr('자동 압박 중') : tr('자동 압박 시작')}
+            aria-pressed={autoPressOn}
+            title={tr('자동 압박')}
+          >
+            {/* Concentric ripples — reads as "auto tapping / press
+                waves". Center dot is the tap, rings are the pulse. */}
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+              <circle cx="12" cy="12" r="6" opacity="0.6" />
+              <circle cx="12" cy="12" r="10" opacity="0.3" />
+            </svg>
+            <span className={styles.autoBtnLabel}>auto</span>
           </button>
           <div className={styles.sideBtnWrap}>
             {(() => {
@@ -5620,6 +5788,7 @@ export default function SlimeApp() {
                 bottomMode === 'collection' ||
                 collectionMenuOpen
               }
+              data-flat="true"
               onClick={() => {
                 if (bottomMode === 'collection') {
                   setBottomMode('options')

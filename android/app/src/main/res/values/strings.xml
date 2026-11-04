@@ -4,4 +4,8 @@
     <string name="title_activity_main">soundslime</string>
     <string name="package_name">io.wakbu.slime</string>
     <string name="custom_url_scheme">io.wakbu.slime</string>
+    <string name="widget_slime_content_description">soundslime 위젯</string>
+    <string name="widget_description">홈 화면에 내 슬라임을 올려두세요</string>
+    <string name="shortcut_collection_short">컬렉션</string>
+    <string name="shortcut_collection_long">저장한 슬라임 열기</string>
 </resources>

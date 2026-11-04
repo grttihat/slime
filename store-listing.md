@@ -69,7 +69,7 @@ soundslime은 정말로 만질 수 있는 것 같은 3D 슬라임과 함께
 
 ────────────────
 
-개인정보처리방침: https://parkyoonha.github.io/slimong-policy/
+개인정보처리방침: https://grttihat.github.io/slimong-policy/
 문의: grttihat@gmail.com
 ```
 

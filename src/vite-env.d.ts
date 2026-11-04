@@ -16,6 +16,9 @@ interface ImportMetaEnv {
   readonly VITE_ADMOB_ANDROID_BANNER?: string
   readonly VITE_ADMOB_ANDROID_INTERSTITIAL?: string
   readonly VITE_ADMOB_TESTING?: string
+  readonly VITE_EMAILJS_PUBLIC_KEY?: string
+  readonly VITE_EMAILJS_SERVICE_ID?: string
+  readonly VITE_EMAILJS_TEMPLATE_ID?: string
 }
 
 interface ImportMeta {

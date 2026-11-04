@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { usePremium } from './usePremium'
+import { useAuth } from '../auth/AuthContext'
 
 const SAVE_LIMIT = 2
 const SHARE_LIMIT = 2
-const SAVE_KEY = 'wakbu.freeTier.saveCount'
-const SHARE_KEY = 'wakbu.freeTier.shareCount'
+
+function saveKey(userId: string | null | undefined): string {
+  return `wakbu.freeTier.saveCount:${userId ?? '__anon__'}`
+}
+function shareKey(userId: string | null | undefined): string {
+  return `wakbu.freeTier.shareCount:${userId ?? '__anon__'}`
+}
 
 function readCount(key: string): number {
   if (typeof window === 'undefined') return 0
@@ -18,40 +24,51 @@ function writeCount(key: string, n: number) {
 }
 
 /** Lifetime save / share counters for the free tier. Persisted in
- *  localStorage — resets if the user clears app data, which is an
- *  acceptable loophole given the low price point. Premium always allows. */
+ *  localStorage, scoped to the signed-in user so switching accounts on
+ *  the same device doesn't carry one user's quota onto another. Resets
+ *  if the user clears app data — acceptable loophole given the price
+ *  point. Premium always allows. */
 export function useFreeTierLimits() {
   const { isPremium } = usePremium()
-  const [saveCount, setSaveCount] = useState(() => readCount(SAVE_KEY))
-  const [shareCount, setShareCount] = useState(() => readCount(SHARE_KEY))
+  const { user } = useAuth()
+  const sk = saveKey(user?.id)
+  const shk = shareKey(user?.id)
+  const [saveCount, setSaveCount] = useState(() => readCount(sk))
+  const [shareCount, setShareCount] = useState(() => readCount(shk))
 
-  // Re-read on premium flip in case we were off-device for the actual
-  // purchase (restore flow) — keeps counts in sync with storage.
+  // Re-hydrate whenever the active user changes OR premium flips (the
+  // latter happens via the restore flow). The keys depend on user.id,
+  // so switching accounts loads that user's own counters without
+  // leaking the previous user's quota.
   useEffect(() => {
-    setSaveCount(readCount(SAVE_KEY))
-    setShareCount(readCount(SHARE_KEY))
-  }, [isPremium])
+    setSaveCount(readCount(sk))
+    setShareCount(readCount(shk))
+  }, [sk, shk, isPremium])
 
-  const canSave = isPremium || saveCount < SAVE_LIMIT
-  const canShare = isPremium || shareCount < SHARE_LIMIT
+  // TEMPORARY: payments are disabled while we iterate on the IAP flow,
+  // so free-tier users would be stuck at the 2-save / 2-share cap with
+  // no way to upgrade. Hard-code unlimited until the paywall ships; the
+  // counters stay wired so re-enabling is a one-line revert.
+  const canSave = true
+  const canShare = true
 
   const incrementSave = useCallback(() => {
     if (isPremium) return
     setSaveCount((n) => {
       const next = n + 1
-      writeCount(SAVE_KEY, next)
+      writeCount(sk, next)
       return next
     })
-  }, [isPremium])
+  }, [isPremium, sk])
 
   const incrementShare = useCallback(() => {
     if (isPremium) return
     setShareCount((n) => {
       const next = n + 1
-      writeCount(SHARE_KEY, next)
+      writeCount(shk, next)
       return next
     })
-  }, [isPremium])
+  }, [isPremium, shk])
 
   return {
     saveCount,

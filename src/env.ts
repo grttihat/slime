@@ -13,5 +13,8 @@ export const ENV = {
   FREE_DAILY_LIMIT: Number(import.meta.env.VITE_FREE_DAILY_LIMIT ?? 5),
   ADMOB_ANDROID_BANNER: import.meta.env.VITE_ADMOB_ANDROID_BANNER ?? '',
   ADMOB_ANDROID_INTERSTITIAL: import.meta.env.VITE_ADMOB_ANDROID_INTERSTITIAL ?? '',
-  ADMOB_TESTING: (import.meta.env.VITE_ADMOB_TESTING ?? '').toLowerCase() === 'true' || import.meta.env.DEV
+  ADMOB_TESTING: (import.meta.env.VITE_ADMOB_TESTING ?? '').toLowerCase() === 'true' || import.meta.env.DEV,
+  EMAILJS_PUBLIC_KEY: import.meta.env.VITE_EMAILJS_PUBLIC_KEY ?? '',
+  EMAILJS_SERVICE_ID: import.meta.env.VITE_EMAILJS_SERVICE_ID ?? '',
+  EMAILJS_TEMPLATE_ID: import.meta.env.VITE_EMAILJS_TEMPLATE_ID ?? ''
 } as const

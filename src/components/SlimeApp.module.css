@@ -51,6 +51,77 @@
   align-items: center;
 }
 
+/* Top-centre pill that only renders while hand tracking is on. Lets
+   the user hide the joint/line skeleton overlay without turning the
+   whole tracking pipeline off. */
+.topCenterBar {
+  position: absolute;
+  top: max(32px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.skeletonVisToggle {
+  pointer-events: auto;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-soft);
+  outline: none;
+  background: var(--bg-chip);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.skeletonVisToggle:active {
+  opacity: 0.85;
+}
+
+/* Flat variant: no filled chip, just the icon on the panel.
+   Overrides the generic topButtonRow fill so the button reads as a
+   weightless HUD glyph. Applied to every bottom-row button EXCEPT
+   the undo + shape-reset pair, which stay chipped so the "action /
+   confirmation" controls feel distinct from pure toggles. */
+.topButtonRow > button[data-flat='true'],
+.topButtonRow > button[data-flat='true']:hover,
+.topButtonRow > button[data-flat='true']:focus,
+.topButtonRow > button[data-flat='true']:focus-visible,
+.topButtonRow > .sideBtnWrap > button[data-flat='true'],
+.topButtonRow > .sideBtnWrap > button[data-flat='true']:hover,
+.topButtonRow > .sideBtnWrap > button[data-flat='true']:focus,
+.topButtonRow > .sideBtnWrap > button[data-flat='true']:focus-visible {
+  background: transparent;
+}
+
+/* Chipped buttons (the undo + shape-reset pair, i.e. everything NOT
+   marked data-flat) read as round action tokens — equal-sided circles
+   so they stand apart from the rectangular flat glyphs flanking them. */
+.topButtonRow > button.sideBtn:not([data-flat='true']) {
+  border-radius: 50%;
+  width: 46px;
+}
+
+/* Undo button dims to 0.3 when the history stack is empty so the user
+   can tell at a glance whether tapping it will do anything. */
+.sideBtn[data-dim='true'] {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.sideBtn[data-dim='true']:active {
+  opacity: 0.3;
+}
+
 /* Symmetric top-left cluster hosting the persistent
    collection + share icons — kept on the left so they don't
    compete with the top-right hamburger + contextual toggles. */
@@ -181,8 +252,8 @@
 }
 
 .drawerItem {
-  background: transparent;
-  border: 1px solid var(--color-border-soft);
+  background: var(--bg-drawer-item);
+  border: none;
   outline: none;
   color: var(--color-text);
   text-align: left;
@@ -693,13 +764,11 @@
   right: 4px;
 }
 
+
 .collectionDeleteBtn:hover,
 .collectionDeleteBtn:focus-visible,
 .collectionShareBtn:hover,
-.collectionShareBtn:focus-visible {
-  background: rgba(0, 0, 0, 0.8);
-  outline: none;
-}
+.collectionShareBtn:focus-visible,
 
 .collectionNameLabel {
   margin-top: 6px;
@@ -865,30 +934,6 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Press-reset is slot 4 (options • hand • auto-press • press-reset •
-   collection) — a slightly-wider pill that reads as the row's centre
-   action without ballooning across the whole row. Capped at ~132px so
-   the other buttons stay comfortably sized. */
-.topButtonRow > button.sideBtn:nth-child(4) {
-  flex: 1;
-  width: auto;
-  max-width: 132px;
-}
-
-/* Press-reset button — quick tap flash: darker fill while pressed,
-   springs back to the default toggle colour on release with no
-   lingering hover state. */
-.topButtonRow > button.sideBtn:nth-child(4),
-.topButtonRow > button.sideBtn:nth-child(4):hover,
-.topButtonRow > button.sideBtn:nth-child(4):focus,
-.topButtonRow > button.sideBtn:nth-child(4):focus-visible {
-  background: var(--bg-toggle);
-  color: var(--color-text);
-  outline: none;
-}
-.topButtonRow > button.sideBtn:nth-child(4):active {
-  background: var(--bg-toggle-hover);
-}
 
 /* CustomizePanel + unified tag row live inside a padded inner
    wrapper so they stay 16px in from the edges, while the bottom
@@ -1165,6 +1210,21 @@
 
 .sideBtn[data-active='true'] {
   color: #4a9eff;
+}
+
+/* Autoplay variant — stacks the ripple icon above a tiny "auto" label
+   so users can tell what the button does without hovering for a title. */
+.autoBtn {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.autoBtnLabel {
+  font-size: 9px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
 }
 
 /* Collection button variant — when the user has customised the slime

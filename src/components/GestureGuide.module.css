@@ -1,0 +1,112 @@
+/* The overlay sits above the slime canvas but keeps a mostly
+   transparent fill so the live scene stays visible underneath — the
+   whole point is to show the gesture AGAINST the thing the user is
+   about to touch. A thin dim layer helps the white fingertip dots
+   stand out without hiding the slime. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.28);
+  animation: fade 220ms ease;
+  cursor: pointer;
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Dot stage — positioned slightly above viewport centre so the dots
+   land near the slime's visual centre instead of its lower half (the
+   mesh gets pushed up by the open customize panel; our origin needs
+   to match). Width/height 0 keeps the stage a single anchor point so
+   keyframe translates compose cleanly from it. */
+.stage {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* Fingertip dot. Pure white with soft glow + outer ring so it reads
+   on top of any slime colour / background. */
+.finger {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    0 0 0 3px rgba(255, 255, 255, 0.28);
+}
+
+/* ───── Pinch (two fingers spread/pinch) ───── */
+
+.pinchA { animation: pinchA 2.2s ease-in-out infinite; }
+.pinchB { animation: pinchB 2.2s ease-in-out infinite; }
+
+@keyframes pinchA {
+  0%, 100% { transform: translate(-30px, 0); }
+  50%      { transform: translate(-90px, 0); }
+}
+@keyframes pinchB {
+  0%, 100% { transform: translate(30px, 0); }
+  50%      { transform: translate(90px, 0); }
+}
+
+/* ───── Two-finger rotate (both fingers travel in an arc, keeping
+   their offset so it reads as a rotation around the slime centre). ───── */
+
+.rotateA { animation: rotateA 2.4s ease-in-out infinite; }
+.rotateB { animation: rotateB 2.4s ease-in-out infinite; }
+
+/* Both dots are 45px off-centre in opposite directions; the keyframes
+   rotate the pair ~70° left and right of their rest position. */
+@keyframes rotateA {
+  0%   { transform: rotate(-35deg) translateX(-45px); }
+  50%  { transform: rotate(35deg)  translateX(-45px); }
+  100% { transform: rotate(-35deg) translateX(-45px); }
+}
+@keyframes rotateB {
+  0%   { transform: rotate(-35deg) translateX(45px); }
+  50%  { transform: rotate(35deg)  translateX(45px); }
+  100% { transform: rotate(-35deg) translateX(45px); }
+}
+
+/* ───── Caption + CTA (bottom) ───── */
+
+/* Caption sits in the dead space between the slime (centred near 42%)
+   and the options panel (bottom). ~72% from top lands cleanly below
+   the slime's lower edge without crowding the options. */
+.captionWrap {
+  position: absolute;
+  top: 72%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  text-align: center;
+  color: #ffffff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.captionTitle {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.captionHint {
+  font-size: 11px;
+  margin-top: 4px;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+

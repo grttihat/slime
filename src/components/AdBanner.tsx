@@ -1,39 +1,17 @@
 import { useEffect } from 'react'
-import { usePremium } from '../hooks/usePremium'
-import {
-  hideBanner,
-  initializeAdMob,
-  isAdMobSupported,
-  prepareInterstitial,
-  removeBanner,
-  showBottomBanner
-} from '../lib/admob'
+import { isAdMobSupported, removeBanner } from '../lib/admob'
 
-/** Mount this once at app root (inside the auth gate). Shows a bottom
- *  banner on native Android while the user is on the free tier, and
- *  removes it the moment they become premium. Also preloads the save-
- *  gate interstitial so `showInterstitial()` resolves instantly when
- *  the user hits save. No-op on web. */
+/** TEMPORARY: ads are hidden while payments are disabled so free-tier
+ *  users don't see banners they can't currently pay to remove. The
+ *  AdMob init call is skipped entirely to avoid network / SDK startup
+ *  cost. Revert this file to re-enable the banner + interstitial flow
+ *  (see git history for the full original). */
 export default function AdBanner() {
-  const { isPremium, loading } = usePremium()
-
   useEffect(() => {
     if (!isAdMobSupported()) return
-    void (async () => {
-      await initializeAdMob()
-      void prepareInterstitial()
-    })()
+    // In case a previous session left a banner on screen, tear it down.
+    void removeBanner()
   }, [])
-
-  useEffect(() => {
-    if (!isAdMobSupported() || loading) return
-    if (isPremium) {
-      void removeBanner()
-      return
-    }
-    void showBottomBanner()
-    return () => { void hideBanner() }
-  }, [isPremium, loading])
 
   return null
 }

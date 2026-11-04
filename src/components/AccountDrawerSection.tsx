@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { usePremium } from '../hooks/usePremium'
+import { useLocale } from '../i18n'
 import { restorePurchases } from '../lib/revenuecat'
 import Paywall from './Paywall'
 import styles from './AccountDrawerSection.module.css'
@@ -30,6 +31,7 @@ export function AccountDrawerTop(_: Props) {
 export function AccountDrawerFooter({ onCloseDrawer }: Props) {
   const { user, signOut } = useAuth()
   const { isPremium, refresh } = usePremium()
+  const { locale } = useLocale()
   const [signingOut, setSigningOut] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [paywallOpen, setPaywallOpen] = useState(false)
@@ -73,12 +75,12 @@ export function AccountDrawerFooter({ onCloseDrawer }: Props) {
 
   return (
     <div className={styles.footer}>
-      <button
-        type="button"
-        className={styles.profile}
-        onClick={() => { setRestoreMsg(null); setDetailsOpen(true) }}
-        aria-label="계정 및 프리미엄 상태"
-      >
+      {/* TEMPORARY: profile row click is disabled while payments are
+          off — opening the premium panel would surface a purchase CTA
+          that currently has no live payment flow behind it. Rendered as
+          a plain div so it looks the same but doesn't react to taps.
+          Revert to <button onClick=...> when the paywall ships. */}
+      <div className={styles.profile} aria-label="계정">
         <div className={styles.avatar}>
           {avatarUrl ? <img src={avatarUrl} alt="" /> : initialFor(displayName, email)}
         </div>
@@ -86,13 +88,14 @@ export function AccountDrawerFooter({ onCloseDrawer }: Props) {
           <div className={styles.name}>{displayName ?? email ?? '사용자'}</div>
           {email && displayName && <div className={styles.email}>{email}</div>}
         </div>
-        <span className={isPremium ? styles.badgePro : styles.badgeFree}>
-          {isPremium ? '프리미엄' : '일반'}
-        </span>
-      </button>
+      </div>
 
       <button className={styles.logout} onClick={handleSignOut} disabled={signingOut}>
-        <span>{signingOut ? '로그아웃 중…' : '로그아웃'}</span>
+        <span>
+          {signingOut
+            ? locale === 'ko' ? '로그아웃 중…' : 'Signing out…'
+            : locale === 'ko' ? '로그아웃' : 'Sign out'}
+        </span>
         <span className={styles.chevron}>›</span>
       </button>
 

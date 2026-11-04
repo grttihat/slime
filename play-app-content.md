@@ -6,7 +6,7 @@ Play Console → **App content** 페이지의 모든 항목별 정답 & 주의�
 ---
 
 ## 1. ✅ 개인정보처리방침 설정 (완료)
-- URL: `https://parkyoonha.github.io/slimong-policy/`
+- URL: `https://grttihat.github.io/slimong-policy/`
 
 ---
 

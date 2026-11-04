@@ -1526,7 +1526,9 @@ export default function CustomizePanel({
     // own copy of the sub-cat list further down.
     const subs =
       activeCombo === 'chunk'
-        ? BEAD_SUB_CATEGORIES_BY_COMBO.chunk.filter((s) => s.id !== 'coating')
+        ? BEAD_SUB_CATEGORIES_BY_COMBO.chunk.filter(
+            (s) => s.id !== 'coating' && s.id !== 'material'
+          )
         : (BEAD_SUB_CATEGORIES_BY_COMBO[activeCombo] ?? [])
     const activeSub = subs.some((s) => s.id === beadsSub)
       ? beadsSub

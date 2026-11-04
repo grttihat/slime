@@ -137,7 +137,7 @@ Play Console에 카테고리별로 나열됨. 각 항목에 "Collected? / Shared
 
 ## ✅ 저장하기 전 최종 체크
 
-- [ ] 개인정보처리방침 URL(`https://parkyoonha.github.io/slimong-policy/`) 입력
+- [ ] 개인정보처리방침 URL(`https://grttihat.github.io/slimong-policy/`) 입력
 - [ ] 실제 앱 동작과 declaration 일치 (거짓 선언 시 Play 정책 위반)
 - [ ] Save → Submit for review
 

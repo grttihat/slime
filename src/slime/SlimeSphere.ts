@@ -688,19 +688,30 @@ export class SlimeSphere {
     this.recomputeRestVolumeMetric()
     posAttr.needsUpdate = true
 
-    // Preset mesh orientation per shape. Cube / rect get a 3/4 hero
-    // view (yaw so the right face peeks in + pitch so the top face
-    // peeks down) so the user immediately sees the box silhouette
-    // rather than a flat square / bar face. Sphere / twist reset to
-    // identity so their symmetric silhouettes read straight-on.
-    if (shape === 'cube' || shape === 'rect') {
+    // Preset mesh orientation per shape — delegated to the shared
+    // helper so press-reset / unified-tag-reset can re-apply the same
+    // "first-applied" angle without duplicating the Euler constants.
+    this.applyDefaultOrientation()
+    this.geometry.computeVertexNormals()
+  }
+
+  /** Snap the mesh back to the shape's canonical starting orientation.
+   *  Cube / rect get a 3/4 hero view (yaw so the right face peeks in,
+   *  pitch so the top face peeks down) so the user immediately sees
+   *  the box silhouette rather than a flat square / bar face. Sphere /
+   *  twist reset to identity because their symmetric silhouettes read
+   *  the same from every angle. Called from both setShape (on initial
+   *  application) and SlimeApp.reset (so the press-reset button
+   *  returns the shape to the pose it had when the user first picked
+   *  it, not to identity). */
+  applyDefaultOrientation() {
+    if (this.currentShape === 'cube' || this.currentShape === 'rect') {
       this.mesh.quaternion.setFromEuler(
         new THREE.Euler(-0.26, 0.44, 0, 'YXZ')
       )
     } else {
       this.mesh.quaternion.identity()
     }
-    this.geometry.computeVertexNormals()
   }
 
   private recomputeRestVolumeMetric() {

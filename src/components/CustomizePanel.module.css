@@ -109,7 +109,7 @@
 }
 
 :global(html[data-theme='light']) .tabs {
-  background: rgba(220, 220, 228, 0.9);
+  background: rgba(236, 236, 242, 0.9);
 }
 
 .tabs[data-at-start='true'] {

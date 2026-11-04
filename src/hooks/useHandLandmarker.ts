@@ -5,10 +5,12 @@ import {
   type HandLandmarkerResult
 } from '@mediapipe/tasks-vision'
 
-const WASM_URL =
-  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.17/wasm'
-const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
+// Bundled with the app under /public/mediapipe/. Serving from the local
+// WebView origin eliminates the CDN flakiness that previously caused
+// HAND_LOAD_TIMEOUT on slow / unstable networks — now the model loads
+// as fast as the device can read its own filesystem.
+const WASM_URL = '/mediapipe/wasm'
+const MODEL_URL = '/mediapipe/hand_landmarker.task'
 
 export type HandStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -77,7 +79,7 @@ export function useHandLandmarker(enabled: boolean = true) {
     setStatus('loading')
     setError(null)
 
-    const LOAD_TIMEOUT_MS = 5000
+    const LOAD_TIMEOUT_MS = 10000
     const MAX_ATTEMPTS = 2
 
     const attemptLoad = (attempt: number) => {

@@ -1087,7 +1087,12 @@ function pickIndices(unitDirs: Float32Array, count: number): number[] {
 function makePowderDensity(
   amount: number
 ): (x: number, y: number, z: number) => number {
-  const threshold = 0.05 + 0.65 * amount
+  // At max slider the ribbon mode should visually read as "fully coated"
+  // (what users expect from maxing out 양). Each noise octave contributes
+  // 1 + 0.5 + 0.25 + 0.125 ≈ 1.875 in amplitude, so a threshold around 2
+  // keeps the entire surface inside the ribbon. We ramp up to 2.1 at the
+  // top end of the slider; low amounts keep the thin ribbon look.
+  const threshold = 0.05 + 2.05 * amount
   return (x, y, z) => {
     let px = x * 1.6
     let py = y * 1.6

@@ -10,15 +10,15 @@
   <meta property="og:title" content="친구가 직접 만든 슬라임을 공유했어요" />
   <meta property="og:description" content="" />
   <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://parkyoonha.github.io/slime/landing/" />
+  <meta property="og:url" content="https://grttihat.github.io/slime/landing/" />
   <meta property="og:site_name" content="soundslime" />
-  <meta property="og:image" content="https://parkyoonha.github.io/slime/landing/share-thumbnail.png" />
+  <meta property="og:image" content="https://grttihat.github.io/slime/landing/share-thumbnail.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="친구가 직접 만든 슬라임을 공유했어요" />
   <meta name="twitter:description" content="" />
-  <meta name="twitter:image" content="https://parkyoonha.github.io/slime/landing/share-thumbnail.png" />
+  <meta name="twitter:image" content="https://grttihat.github.io/slime/landing/share-thumbnail.png" />
 
   <style>
     :root {
@@ -296,32 +296,28 @@
   </section>
 
   <script>
-    // Share-link hand-off. If URL carries ?d=<base64>:
-    //   • Android Chrome: fire an Intent URL — Chrome routes to the
-    //     app if installed AND auto-closes its own tab (so recipient
-    //     doesn't see this landing page lingering after app opens).
-    //     Fallback: Play Store install URL embedded in the intent.
-    //   • Other browsers (iOS / desktop / non-Chrome): keep the
-    //     visible "앱에서 열기" button + Play Store link as fallback.
-    (function handleShareHandoff() {
-      try {
-        var params = new URLSearchParams(window.location.search);
-        var d = params.get('d');
-        if (!d) return;
-        var customScheme = 'io.wakbu.slime://share?d=' + encodeURIComponent(d);
-        var storeUrl =
-          'https://play.google.com/store/apps/details?id=io.wakbu.slime&referrer=d%3D' +
-          encodeURIComponent(d);
-        // Android Intent URL — Chrome handles this specially: tries to
-        // launch the app, and crucially CLOSES ITS OWN TAB when the app
-        // takes over (unlike a plain custom-scheme navigation which
-        // leaves the browser tab in the background).
+    // Share-link hand-off. Supports two URL formats:
+    //   • ?d=<base64>  — raw payload inline (legacy, long URLs)
+    //   • ?s=<code>    — 8-char lookup into Supabase share_links
+    //                    (new, short URLs; we fetch the payload first)
+    // Both resolve to the same final step: try to open the app with the
+    // decoded payload; if the app isn't installed, send the user to the
+    // Play Store so they can install it.
+    (function () {
+      var SUPABASE_URL = 'https://oknbmhqnbryrfbykhqde.supabase.co';
+      var SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9rbmJtaHFuYnJ5cmZieWtocWRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MDAxNzUsImV4cCI6MjEwMzQ3NjE3NX0.OBFIussDgCklpCYl9Py07jr8Ir5GvUBXKlzMNtY8TGc';
+      var STORE_URL = 'https://play.google.com/store/apps/details?id=io.wakbu.slime';
+
+      function openAppWithPayload(payload) {
+        var customScheme = 'io.wakbu.slime://share?d=' + encodeURIComponent(payload);
         var intentUrl =
-          'intent://parkyoonha.github.io/slimong/?d=' + encodeURIComponent(d) +
+          'intent://grttihat.github.io/slime/landing/?d=' + encodeURIComponent(payload) +
           '#Intent;scheme=https;package=io.wakbu.slime;' +
-          'S.browser_fallback_url=' + encodeURIComponent(storeUrl) +
+          'S.browser_fallback_url=' + encodeURIComponent(STORE_URL) +
           ';end;';
 
+        // Make the visible hand-off panel + CTAs available as a manual
+        // fallback (user can tap even if the auto-redirect is blocked).
         var handoff = document.getElementById('share-handoff');
         var openApp = document.getElementById('share-open-app');
         var storeLink = document.getElementById('share-store');
@@ -329,23 +325,63 @@
         if (handoff) handoff.style.display = 'block';
         if (defaultCta) defaultCta.style.display = 'none';
         if (openApp) openApp.href = customScheme;
-        if (storeLink) storeLink.href = storeUrl;
+        if (storeLink) storeLink.href = STORE_URL;
 
-        // Detect Android Chrome to decide whether to auto-fire intent URL.
+        // Auto-fire. Android Chrome understands intent:// URLs and will
+        // close its own tab when the app consumes the intent. Other
+        // browsers (KakaoTalk in-app WebView, iOS Safari, desktop) fall
+        // back to the custom scheme, which the OS routes to the app if
+        // installed. If neither works, the visible CTA button above
+        // lets the user open the Play Store manually.
         var ua = navigator.userAgent || '';
         var isAndroid = /Android/i.test(ua);
-        var isChrome = /Chrome/i.test(ua) && !/EdgiOS|FxiOS|CriOS/i.test(ua);
         setTimeout(function () {
-          if (isAndroid && isChrome) {
-            // Intent URL: Chrome launches app + closes tab if the app
-            // consumes the intent. If not installed, falls back to
-            // S.browser_fallback_url (= Play Store).
-            window.location.href = intentUrl;
-          } else {
-            // iOS / other browsers: plain custom scheme (best effort).
-            window.location.href = customScheme;
+          try {
+            window.location.href = isAndroid ? intentUrl : customScheme;
+          } catch (_) {}
+          // Second attempt after another beat — some in-app browsers
+          // need a user-gesture-ish delay before honouring the nav.
+          setTimeout(function () {
+            try { window.location.href = customScheme; } catch (_) {}
+          }, 1500);
+        }, 50);
+      }
+
+      function resolveCodeThenOpen(code) {
+        fetch(
+          SUPABASE_URL + '/rest/v1/share_links?code=eq.' +
+            encodeURIComponent(code) + '&select=payload',
+          {
+            headers: {
+              apikey: SUPABASE_ANON,
+              Authorization: 'Bearer ' + SUPABASE_ANON
+            }
           }
-        }, 200);
+        )
+          .then(function (r) { return r.ok ? r.json() : []; })
+          .then(function (rows) {
+            var payload = rows && rows[0] && rows[0].payload;
+            if (!payload) return;
+            // Rewrite the URL so the browser history shows the resolved
+            // ?d= form (nicer if the user hits back / shares again).
+            var p = new URLSearchParams(window.location.search);
+            p.delete('s');
+            p.set('d', payload);
+            window.history.replaceState({}, '', window.location.pathname + '?' + p.toString());
+            openAppWithPayload(payload);
+          })
+          .catch(function () {});
+      }
+
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var d = params.get('d');
+        var s = params.get('s');
+        if (d) {
+          openAppWithPayload(d);
+        } else if (s && /^[A-Za-z0-9_-]+$/.test(s)) {
+          resolveCodeThenOpen(s);
+        }
       } catch (e) { /* malformed URL — fall through to the normal page */ }
     })();
   </script>
@@ -442,7 +478,7 @@
 
       <div class="footer-col">
         <h4>Legal</h4>
-        <a href="https://parkyoonha.github.io/slimong-policy/">개인정보처리방침</a>
+        <a href="https://grttihat.github.io/slimong-policy/">개인정보처리방침</a>
         <a href="mailto:grttihat@gmail.com">문의</a>
       </div>
 
@@ -456,6 +492,39 @@
       © 2026 soundslime. All rights reserved.
     </div>
   </footer>
+
+  <script>
+    // Short-code share handler. The app mints ?s=XXXXXXXX codes that
+    // resolve to the original base64 payload via the share_links
+    // Supabase table. When a recipient opens this page with ?s=code,
+    // fetch the payload and rewrite the URL to ?d=payload so the rest
+    // of the deep-link chain (custom-scheme hand-off into the app,
+    // in-app decoder) sees the familiar legacy format.
+    (function () {
+      var params = new URLSearchParams(window.location.search)
+      var code = params.get('s')
+      if (!code || !/^[A-Za-z0-9_-]+$/.test(code)) return
+      var SUPABASE_URL = 'https://oknbmhqnbryrfbykhqde.supabase.co'
+      var SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9rbmJtaHFuYnJ5cmZieWtocWRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MDAxNzUsImV4cCI6MjEwMzQ3NjE3NX0.OBFIussDgCklpCYl9Py07jr8Ir5GvUBXKlzMNtY8TGc'
+      fetch(SUPABASE_URL + '/rest/v1/share_links?code=eq.' + encodeURIComponent(code) + '&select=payload', {
+        headers: {
+          apikey: SUPABASE_ANON,
+          Authorization: 'Bearer ' + SUPABASE_ANON
+        }
+      })
+        .then(function (r) { return r.ok ? r.json() : [] })
+        .then(function (rows) {
+          var payload = rows && rows[0] && rows[0].payload
+          if (!payload) return
+          // Preserve any other query params the user already had.
+          params.delete('s')
+          params.set('d', payload)
+          var qs = params.toString()
+          window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''))
+        })
+        .catch(function () { /* silently keep the ?s= URL — user still sees the landing page */ })
+    })()
+  </script>
 
 </body>
 </html>

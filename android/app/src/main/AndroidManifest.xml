@@ -46,14 +46,14 @@
                  autoVerify this appears in the "Open with" chooser so
                  recipients can pick the app; enabling App Links later
                  requires hosting /.well-known/assetlinks.json on
-                 parkyoonha.github.io so Android verifies ownership. -->
+                 grttihat.github.io so Android verifies ownership. -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="parkyoonha.github.io"
+                    android:host="grttihat.github.io"
                     android:pathPrefix="/slime/landing" />
             </intent-filter>
 
