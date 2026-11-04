@@ -457,5 +457,38 @@
     </div>
   </footer>
 
+  <script>
+    // Short-code share handler. The app mints ?s=XXXXXXXX codes that
+    // resolve to the original base64 payload via the share_links
+    // Supabase table. When a recipient opens this page with ?s=code,
+    // fetch the payload and rewrite the URL to ?d=payload so the rest
+    // of the deep-link chain (custom-scheme hand-off into the app,
+    // in-app decoder) sees the familiar legacy format.
+    (function () {
+      var params = new URLSearchParams(window.location.search)
+      var code = params.get('s')
+      if (!code || !/^[A-Za-z0-9_-]+$/.test(code)) return
+      var SUPABASE_URL = 'https://oknbmhqnbryrfbykhqde.supabase.co'
+      var SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9rbmJtaHFuYnJ5cmZieWtocWRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MDAxNzUsImV4cCI6MjEwMzQ3NjE3NX0.OBFIussDgCklpCYl9Py07jr8Ir5GvUBXKlzMNtY8TGc'
+      fetch(SUPABASE_URL + '/rest/v1/share_links?code=eq.' + encodeURIComponent(code) + '&select=payload', {
+        headers: {
+          apikey: SUPABASE_ANON,
+          Authorization: 'Bearer ' + SUPABASE_ANON
+        }
+      })
+        .then(function (r) { return r.ok ? r.json() : [] })
+        .then(function (rows) {
+          var payload = rows && rows[0] && rows[0].payload
+          if (!payload) return
+          // Preserve any other query params the user already had.
+          params.delete('s')
+          params.set('d', payload)
+          var qs = params.toString()
+          window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''))
+        })
+        .catch(function () { /* silently keep the ?s= URL — user still sees the landing page */ })
+    })()
+  </script>
+
 </body>
 </html>
